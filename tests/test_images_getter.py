@@ -12,6 +12,7 @@ async def main():
         world = World(client, "scene_basic_drone.jsonc", delay_after_load_sec=2)
         drone = Drone(client, world, "Drone1")
 
+        # callback
         chase_cam_window = "FrontCamera"
         image_display.add_chase_cam(chase_cam_window)
         client.subscribe(

@@ -13,8 +13,15 @@ from envs.smallcity_env import SmallCityEnv
 def main():
     env = SmallCityEnv()
     model = PPO(
-        "MlpPolicy",
-        env
+        "MultiInputPolicy",
+        env,
+        policy_kwargs=dict(net_arch=(dict(pi=[256, 256], vf=[256, 256]))),
+        n_steps=128,
+        batch_size=64,
+        n_epochs=10,
+        learning_rate=5e-4,
+        gamma=0.99,
+        verbose=2,
     )
     model.learn(total_timesteps=int(1e2))
     
