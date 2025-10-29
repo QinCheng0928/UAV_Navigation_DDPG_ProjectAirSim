@@ -7,12 +7,12 @@ print(f"ROOT_DIR = {ROOT_DIR}")
 print(f"MODULE_DIR = {MODULE_DIR}")
 
 from datetime import datetime
-from stable_baselines3 import DDPG
+from stable_baselines3 import PPO
 from envs.smallcity_env import SmallCityEnv
 
 def main():
     env = SmallCityEnv()
-    model = DDPG(
+    model = PPO(
         "MlpPolicy",
         env
     )

@@ -4,6 +4,7 @@ import math
 import gymnasium as gym
 from gymnasium import spaces
 from projectairsim import ProjectAirSimClient, Drone, World
+from projectairsim.image_utils import ImageDisplay
 
 class SmallCityEnv(gym.Env):
     def __init__(self, step_length = 0.1, image_shape = (84, 84, 1)):
@@ -28,34 +29,45 @@ class SmallCityEnv(gym.Env):
         self.client.connect()
         self.world = World(self.client, "scene_basic_drone.jsonc", delay_after_load_sec=2)
         self.drone = Drone(self.client, self.world, "Drone1")
+        self.image_display = ImageDisplay()
         
         self.action_space = spaces.Discrete(7)
-        self._setup_flight()
-
 
         self.client.subscribe(
             self.drone.robot_info["collision_info"],
             lambda topic, msg: self.state.update({"collision": True}),
         )
 
-        self.image_request = airsim.ImageRequest(
-            3, airsim.ImageType.DepthPerspective, True, False
+        self.chase_cam_window = "FrontCamera"
+        self.image_display.add_chase_cam(self.chase_cam_window)
+        self.client.subscribe(
+            self.drone.sensors["FrontCamera"]["scene_camera"],
+            self._image_update,
         )
-
+        self._setup_flight()
+        
+        
+    def _image_update(self, topic, msg):
+        self.image_display.receive(msg, self.chase_cam_window)
+        self.preprocessed_image = self.preprocess_image(msg)
+        
+        
     def __del__(self):
         self.drone.disarm()
         self.drone.disable_api_control()
+        self.image_display.stop()
         self.client.disconnect()
 
 
     def _setup_flight(self):
         self.drone.enable_api_control()
         self.drone.arm()
+        self.image_display.start()
 
-    def transform_obs(self, responses):
-        img1d = np.array(responses[0].image_data_float, dtype=np.float32)
+    def preprocess_image(self, responses):
+        img1d = np.array(responses, dtype=np.float32)
         img1d = 255 / np.maximum(np.ones(img1d.size), img1d)
-        img2d = np.reshape(img1d, (responses[0].height, responses[0].width))
+        img2d = np.reshape(img1d, (responses.height, responses.width))
 
         from PIL import Image
         image = Image.fromarray(img2d)
@@ -63,9 +75,8 @@ class SmallCityEnv(gym.Env):
 
         return im_final.reshape([84, 84, 1])
 
-    def _get_obs(self):
-        responses = self.drone.simGetImages([self.image_request])
-        depth_image = self.transform_obs(responses)
+    def _obs(self):
+        depth_image = self.preprocessed_image
         
         self.drone_state = self.drone.get_ground_truth_kinematics()
 
@@ -96,76 +107,74 @@ class SmallCityEnv(gym.Env):
 
         return observation
 
-    def _do_action(self, action):
+    async def _do_action(self, action):
         quad_offset = self.interpret_action(action)
-        quad_vel = self.drone.getMultirotorState().kinematics_estimated.linear_velocity
-        self.drone.moveByVelocityAsync(
-            quad_vel.x_val + quad_offset[0],
-            quad_vel.y_val + quad_offset[1],
-            quad_vel.z_val + quad_offset[2],
-            5,
-        ).join()
+        quad_vel = self.state["velocity"]
+        move_up_task = await self.drone.move_by_velocity_async(
+            v_north=quad_vel.x + quad_offset[0], 
+            v_east=quad_vel.y + quad_offset[1], 
+            v_down=quad_vel.z + quad_offset[2], 
+            duration=5)
+        await move_up_task        
 
-    def _compute_reward(self):
-        thresh_dist = 7
-        beta = 1
+    def _rewards(self):
+        thresh_dist = 7.0
+        beta = 0.99
 
-        z = -10
-        pts = [
+        waypoints = [
             np.array([-0.55265, -31.9786, -19.0225]),
             np.array([48.59735, -63.3286, -60.07256]),
             np.array([193.5974, -55.0786, -46.32256]),
             np.array([369.2474, 35.32137, -62.5725]),
             np.array([541.3474, 143.6714, -32.07256]),
         ]
-
-        quad_pt = np.array([
-            self.state["position"].x_val,
-            self.state["position"].y_val,
-            self.state["position"].z_val,
-        ])
+        n_waypoints = len(waypoints)
+        quad_position = np.array([self.state["position"].x, self.state["position"].y, self.state["position"].z])
 
         if self.state["collision"]:
-            reward = -100
+            reward = -100.0
         else:
-            dist = 10000000
-            for i in range(0, len(pts) - 1):
+            dist = np.inf
+            for i in range(n_waypoints - 1):
                 dist = min(
                     dist,
-                    np.linalg.norm(np.cross((quad_pt - pts[i]), (quad_pt - pts[i + 1])))
-                    / np.linalg.norm(pts[i] - pts[i + 1]),
+                    np.linalg.norm(np.cross((quad_position - waypoints[i]), (quad_position - waypoints[i + 1])))
+                    / np.linalg.norm(waypoints[i] - waypoints[i + 1]),
                 )
 
             if dist > thresh_dist:
-                reward = -10
+                reward = -10.0
             else:
                 reward_dist = math.exp(-beta * dist) - 0.5
-                # 使用状态中的速度信息
                 reward_speed = (
                     np.linalg.norm([
-                        self.state["velocity"].x_val,
-                        self.state["velocity"].y_val,
-                        self.state["velocity"].z_val,
+                        self.state["velocity"].x,
+                        self.state["velocity"].y,
+                        self.state["velocity"].z,
                     ]) - 0.5
                 )
                 reward = reward_dist + reward_speed
 
-        done = 0
+        done = False
         if reward <= -10:
-            done = 1
+            done = False
 
         return reward, done
 
     def step(self, action):
         self._do_action(action)
-        obs = self._get_obs()
-        reward, done = self._compute_reward()
+        obs = self._obs()
+        reward, done = self._rewards()
+        truncated = False
+        info = {}
+        return obs, reward, done, truncated, info
+        # return obs, reward, terminated, truncated, info
 
-        return obs, reward, done, self.state
-
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
         self._setup_flight()
-        return self._get_obs()
+        obs = self._obs()
+        info = {}
+        return obs, info
 
     def interpret_action(self, action):
         if action == 0:
