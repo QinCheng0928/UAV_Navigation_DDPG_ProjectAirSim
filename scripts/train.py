@@ -22,8 +22,10 @@ def main():
         learning_rate=5e-4,
         gamma=0.99,
         verbose=2,
+        device="cuda",
+        tensorboard_log="../tensorboard_log/ppo/"
     )
-    model.learn(total_timesteps=int(1e2))
+    model.learn(total_timesteps=int(1e4))
     
     current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = f"ddpg_smallcity_{current_time}"

@@ -40,7 +40,7 @@ class SmallCityEnv(gym.Env):
         self.image_display = ImageDisplay()
         self.client.subscribe(
             self.drone.robot_info["collision_info"],
-            lambda topic, msg: self.state.update({"collision": True}),
+            self._collision_callback,
         )
 
         self.chase_cam_window = "Depth-Image"
@@ -58,10 +58,15 @@ class SmallCityEnv(gym.Env):
         )        
         
         self.sim_step = 0
-        self.max_sim_steps = 1000
+        self.max_sim_steps = 50
+        self.arrived = np.array([140.0, 10.0, -20.0])
+        self.thresh_dist = 5.0
         
         self._setup_flight()
         
+    def _collision_callback(self, topic, msg):
+        print("Collision detected!")
+        self.state["collision"] = True
         
     def _image_update(self, topic, msg):
         self.image_display.receive(msg, self.chase_cam_window)
@@ -100,6 +105,9 @@ class SmallCityEnv(gym.Env):
         velocity = self.state["velocity"]
         speed = np.sqrt(velocity["x"]**2 + velocity["y"]**2 + velocity["z"]**2)
 
+        self.quad_position = np.array([self.state["position"]["x"], self.state["position"]["y"], self.state["position"]["z"]])
+        print(f"Quad Position: {self.quad_position}, Target Position: {self.arrived}, Distance to Target: {self.distance_3d(self.quad_position, self.arrived)}")
+
         observation = {
             'depth_image': depth_image.astype(np.uint8),
             'position': np.array([
@@ -135,12 +143,12 @@ class SmallCityEnv(gym.Env):
             quad_offset = (0, 0, 0)
 
         ## debug mode
-        # if self.sim_step < 5:
-        #     print("Debug mode UP")
-        #     quad_offset = (0, 0, -1)
-        # else:
-        #     print("Debug mode DOWN")
-        #     quad_offset = (0, 0, 1)
+        if self.sim_step < 2:
+            print("Debug mode UP")
+            quad_offset = (0, 0, -1)
+        else:
+            print("Debug mode NORTH")
+            quad_offset = (1, 0, 0)
         
         return quad_offset 
 
@@ -161,33 +169,29 @@ class SmallCityEnv(gym.Env):
         p2 = np.array(p2, dtype=float)
         return np.linalg.norm(p1 - p2)
 
-    def _rewards(self):
-        thresh_dist = 5.0
-        
-        # waypoints = self.generate_dense_path()
-        # n_waypoints = len(waypoints)
-        arrived = np.array([140.0, 10.0, -20.0])
-        quad_position = np.array([self.state["position"]["x"], self.state["position"]["y"], self.state["position"]["z"]])
+    def _has_arrived(self):
+        return self.distance_3d(self.quad_position, self.arrived) < self.thresh_dist
 
+    def _rewards(self):
         dist = np.inf
         
         if self.state["collision"]:
             reward = -100.0
         else:
-            reward_dist = np.linalg.norm(-dist) - 0.5
+            dist = self.distance_3d(self.quad_position, self.arrived)
+            reward_dist = math.exp(-dist) - 0.5
             reward_speed = (np.linalg.norm([self.state["velocity"]["x"], self.state["velocity"]["y"], self.state["velocity"]["z"]]) - 0.5)
             reward = reward_dist + reward_speed
 
-        if self.distance_3d(quad_position, arrived[-1]) < thresh_dist:
+        if self._has_arrived():
             reward += 10.0
         
-        if self.state["collision"]:
-            done = True
-        else:
-            done = False
+        done = self._is_terminal()
         
         return reward, done
 
+    def _is_terminal(self):
+        return bool((self.state["collision"] or self._has_arrived()))
 
     def _is_truncated(self):
         return self.sim_step >= self.max_sim_steps
