@@ -42,7 +42,12 @@ async def main():
             collision_callback,
         )
 
-   
+        move_up_task = await drone.move_by_velocity_async(v_north=0,v_east=0, v_down=-1, duration=2)
+        await move_up_task  
+        
+        move_north_task = await drone.move_by_velocity_async(v_north=1,v_east=0, v_down=0, duration=2)
+        await move_north_task  
+            
         drone.disarm()
         drone.disable_api_control()
     except Exception as err:

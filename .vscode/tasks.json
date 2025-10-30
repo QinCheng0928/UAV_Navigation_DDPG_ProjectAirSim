@@ -1,0 +1,34 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Run UAV Training",     
+      "type": "shell",                 
+      "command": "conda activate UAV_Navigation; cd ./scripts/; python train.py",  
+      // ctrl + shift + b to run
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",  
+        "panel": "shared" 
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run UAV Collision Test",     
+      "type": "shell",                 
+      "command": "conda activate UAV_Navigation; cd ./tests/; python test_collision_getter.py",  
+      "group": {
+        "kind": "build",
+        "isDefault": false
+      },
+      "presentation": {
+        "reveal": "always",  
+        "panel": "shared" 
+      },
+      "problemMatcher": []
+    }
+  ]
+}
