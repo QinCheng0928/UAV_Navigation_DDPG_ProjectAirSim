@@ -1,7 +1,7 @@
 {
     "python-envs.pythonProjects": [
         {
-            "path": "E:\\UAV_Navigation_DDPG_ProjectAirSim",
+            "path": "E:\\UAV_Navigation_DRL_ProjectAirSim",
             "interpreterPath": "D:\\anaconda3\\envs\\UAV_Navigation\\python.exe",
         },
     ]

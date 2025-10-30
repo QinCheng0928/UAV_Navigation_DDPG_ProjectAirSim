@@ -6,7 +6,7 @@ class ActionType:
     SOUTH = 3   # -X
     WEST  = 4   # -Y
     UP    = 5   # -Z
-    NONE  = 6   # hover / no movement
+    BRAKE  = 6   # brake
 
     NUM2NAME = {
         NORTH: "North (+X)",
@@ -15,5 +15,5 @@ class ActionType:
         SOUTH: "South (-X)",
         WEST: "West (-Y)",
         UP: "Up (-Z)",
-        NONE: "None"
+        BRAKE: "Brake"
     }

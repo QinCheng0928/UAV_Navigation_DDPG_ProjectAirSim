@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import math
 
@@ -21,7 +22,7 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         self.max_sim_steps = 500
         self._ignore_first_collision = True
         self.image_shape = (84, 84, 1)
-        self.target_point = np.array([140.0, 10.0, -20.0])
+        self.target_point = np.array([140.0, 10.0, -1.0])
         
         self.loop = asyncio.get_event_loop()
         
@@ -30,8 +31,7 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         self.client = ProjectAirSimClient()
         self.client.connect()
         self.world = World(self.client, self.sim_config_fname)
-        
-        self.image_display = ImageDisplay()
+        self.drone = Drone(self.client, self.world, "Drone1")
         
         self.observation_space = spaces.Dict({
             'depth_image': spaces.Box(0, 255, self.image_shape, np.uint8),
@@ -43,36 +43,61 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         self.action_space = spaces.Discrete(7)
 
         self.state = {
-            'depth_image': np.zeros_like(self.image_shape, dtype=np.uint8),
+            'depth_image': np.zeros(self.image_shape, dtype=np.uint8),
             'position': np.zeros(3, dtype=np.float32), 
             'pose': np.zeros(4, dtype=np.float32), 
             'velocity': np.zeros(3, dtype=np.float32),
             'collision': 0,  
         }
         self.preprocessed_image = np.zeros(self.image_shape, dtype=np.uint8)
+        self.dist = self.distance_3d([60.0, 8.0, -1.0], self.target_point)
+        self.prev_dist = self.dist
+        self.half_dist = self.dist / 2.0
+ 
+        self.client.subscribe(
+            self.drone.robot_info["collision_info"],
+            self._collision_callback,
+        )
+        
+        self.image_display = ImageDisplay()
+        self.chase_cam_window = "Depth-Image"
+        self.image_display.add_chase_cam(self.chase_cam_window)
+        self.client.subscribe(
+            self.drone.sensors["FrontCamera"]["depth_camera"],
+            self._depth_image_callback,
+        )
+
+        rgb_name = "RGB-Image"
+        self.image_display.add_image(rgb_name, subwin_idx=0)
+        self.client.subscribe(
+            self.drone.sensors["FrontCamera"]["scene_camera"],
+            lambda _, rgb: self.image_display.receive(rgb, rgb_name),
+        )
+        self.image_display.start()
         
     def reset(self, *, seed=None, options=None):
-        # reset the value of state variables
+        # reset state variables
         self.state = {
-            'depth_image': np.zeros_like(self.image_shape, dtype=np.uint8),
+            'depth_image': np.zeros(self.image_shape, dtype=np.uint8),
             'position': np.zeros(3, dtype=np.float32), 
             'pose': np.zeros(4, dtype=np.float32), 
             'velocity': np.zeros(3, dtype=np.float32),
             'collision': 0,  
         }
         self.sim_step = 0
-        self.preprocessed_image = np.zeros(self.image_shape, dtype=np.uint8)
         self._ignore_first_collision = True
-        
-        # reset the sim world
+        self.dist = self.distance_3d([60.0, 8.0, -1.0], self.target_point)
+        self.prev_dist = self.dist
+        self.half_dist = self.dist / 2.0
+                
         config_loaded, _ = load_scene_config_as_dict(
             self.sim_config_fname, 
             sim_config_path="../sim_config/", 
             sim_instance_idx=-1
-            )
+        )
         self.world.load_scene(config_loaded, delay_after_load_sec=0)
         self.drone = Drone(self.client, self.world, "Drone1")
-        
+
         self.client.subscribe(
             self.drone.robot_info["collision_info"],
             self._collision_callback,
@@ -84,24 +109,24 @@ class ProjectAirSimSmallCityEnv(gym.Env):
             self.drone.sensors["FrontCamera"]["depth_camera"],
             self._depth_image_callback,
         )
-        
+
         rgb_name = "RGB-Image"
         self.image_display.add_image(rgb_name, subwin_idx=0)
         self.client.subscribe(
             self.drone.sensors["FrontCamera"]["scene_camera"],
             lambda _, rgb: self.image_display.receive(rgb, rgb_name),
-        )   
-        
-        self.image_display.start()           
-        
+        )
+
         self.drone.enable_api_control()
-        self.drone.arm()        
-        
+        self.drone.arm()
+
         obs = self.get_observation()
         info = {}
-        return obs, info
+        return (obs, info)
+
     
     def step(self, action):
+        print("===============================")
         self.sim_step += 1
         
         self.loop.run_until_complete(self._simulate(action))
@@ -112,16 +137,17 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         truncated = self._is_truncated()
         info = {}
         print(f"Reward: {reward}, Done: {done}, Truncated: {truncated}")
-        return obs, reward, done, truncated, info
+        return (obs, reward, done, truncated, info)
         # return obs, reward, done, truncated, info
 
     async def _simulate(self, action):
+        action = int(action)
         print(f"Action taken: {ActionType.NUM2NAME[action]}")
         
-        curr_velocity = self.state["velocity"]
-        vx = curr_velocity[0]
-        vy = curr_velocity[1]
-        vz = curr_velocity[2]
+        curr_velocity = self.state["velocity"] * 0.8
+        vx = float(curr_velocity[0])
+        vy = float(curr_velocity[1])
+        vz = float(curr_velocity[2])
         
         # update velocity based on action
         if action == ActionType.NORTH:
@@ -136,8 +162,17 @@ class ProjectAirSimSmallCityEnv(gym.Env):
             vy -= self.velocity_change
         elif action == ActionType.UP:
             vz -= self.velocity_change
-        elif action == ActionType.NONE:
-            pass
+        elif action == ActionType.BRAKE:
+            vx *= 0.2
+            vy *= 0.2
+            vz *= 0.2
+
+        if self._has_arrived():
+            vx = 0.0
+            vy = 0.0
+            vz = 0.0
+        
+        print(f"Velocity command: vx={vx}, vy={vy}, vz={vz}")
         
         # send velocity command to the drone
         move_up_task = await self.drone.move_by_velocity_async(v_north=vx, v_east=vy, v_down=vz, duration=0.5)
@@ -151,28 +186,55 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         
         # get position, pose, velocity
         self.drone_state = self.drone.get_ground_truth_kinematics()
-        self.state["position"] = [self.drone_state["pose"]["position"]["x"], self.drone_state["pose"]["position"]["y"], self.drone_state["pose"]["position"]["z"]]
-        self.state["pose"] =[ self.drone_state["pose"]["orientation"]["w"], self.drone_state["pose"]["orientation"]["x"], self.drone_state["pose"]["orientation"]["y"], self.drone_state["pose"]["orientation"]["z"]]
-        self.state["velocity"] = [self.drone_state["twist"]["linear"]["x"], self.drone_state["twist"]["linear"]["y"], self.drone_state["twist"]["linear"]["z"]]
+        self.state["position"] = np.array([
+            self.drone_state["pose"]["position"]["x"],
+            self.drone_state["pose"]["position"]["y"],
+            self.drone_state["pose"]["position"]["z"]
+        ], dtype=np.float32)
+
+        self.state["pose"] = np.array([
+            self.drone_state["pose"]["orientation"]["w"],
+            self.drone_state["pose"]["orientation"]["x"],
+            self.drone_state["pose"]["orientation"]["y"],
+            self.drone_state["pose"]["orientation"]["z"]
+        ], dtype=np.float32)
+
+        self.state["velocity"] = np.array([
+            self.drone_state["twist"]["linear"]["x"],
+            self.drone_state["twist"]["linear"]["y"],
+            self.drone_state["twist"]["linear"]["z"]
+        ], dtype=np.float32)
         # collison state is updated in the _collision_callback function
 
         return self.state
 
     def get_reward(self):
         # rewards for speed and distance to the target point 
-        dist = self.distance_3d(self.state["position"], self.target_point)
-        reward_dist = math.exp(-dist) - 0.5
-        reward_speed = (np.linalg.norm([self.state["velocity"][0], self.state["velocity"][1], self.state["velocity"][2]]) - 0.5)            
-        reward = reward_dist + reward_speed
+        self.prev_dist = self.dist
+        self.dist = self.distance_3d(self.state["position"], self.target_point)
         
-        # rewards for collision and terminal state
-        if self.state["collision"] or self._is_terminal():
+        print(f"Prev Distance to target : {self.prev_dist}. Distance to target: {self.dist}")
+        
+        # 1. rewards for progress
+        reward_progress = 5.0 * (self.prev_dist - self.dist)
+        # 2. rewards for distance
+        reward_distance = 5.0 * (1 - self.dist / self.half_dist)
+        # 3. rewards for speed
+        reward_speed = np.linalg.norm([self.state["velocity"][0], self.state["velocity"][1], self.state["velocity"][2]])            
+        # 4. rewards for arrival
+        reward_arrival = 50.0 if self._has_arrived() else 0.0
+        # 5. rewards for safety (based on depth image)
+        depth = self.preprocessed_image.astype(np.float32) / 255.0
+        min_depth = np.min(depth)
+        reward_safe = 5 * np.tanh(min_depth - 0.01)
+        
+        reward = reward_progress + reward_distance + reward_speed + reward_arrival + reward_safe
+        print(f"Reward Progress: {reward_progress}, Reward Distance: {reward_distance}, Reward Speed: {reward_speed}, Reward Arrival: {reward_arrival}, Reward Safe: {reward_safe}")
+        
+        # 7. rewards for collision and terminal state
+        if self.state["collision"] or self._is_truncated():
             reward = -100.0
-        
-        # rewards for arrival
-        if self._has_arrived():
-            reward += 10.0
-        
+         
         return reward
         
     def close(self):
@@ -186,12 +248,10 @@ class ProjectAirSimSmallCityEnv(gym.Env):
     # ==================================================
     def preprocess_image(self, responses):
         img2d = np.array(responses, dtype=np.float32)
-        img2d = 255 / np.maximum(np.ones_like(img2d), img2d)
-        img2d = np.clip(img2d, 0, 255).astype(np.uint8)
+        img2d = img2d.astype(np.uint8)
         from PIL import Image
         image = Image.fromarray(img2d)
         im_final = np.array(image.resize((84, 84)).convert("L"))
-
         return im_final.reshape([84, 84, 1])
 
     def distance_3d(self, p1, p2):

@@ -10,6 +10,9 @@ from datetime import datetime
 from stable_baselines3 import PPO
 from envs.projectairsim_smallcity_env import ProjectAirSimSmallCityEnv
 
+current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+os.makedirs(os.path.join(MODULE_DIR, current_time), exist_ok=True)
+
 def main():
     env = ProjectAirSimSmallCityEnv()
     model = PPO(
@@ -23,13 +26,12 @@ def main():
         gamma=0.99,
         verbose=2,
         device="cuda",
-        tensorboard_log="../tensorboard_log/ppo/"
+        tensorboard_log=os.path.join(MODULE_DIR, current_time)
     )
     model.learn(total_timesteps=int(1e4))
     
-    current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_name = f"ddpg_smallcity_{current_time}"
-    save_path = os.path.join(MODULE_DIR, model_name)
+    model_name = f"ppo_smallcity_{current_time}"
+    save_path = os.path.join(MODULE_DIR, current_time, model_name)
     model.save(save_path)
     
     
