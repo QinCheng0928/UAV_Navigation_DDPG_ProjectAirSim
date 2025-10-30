@@ -8,10 +8,10 @@ print(f"MODULE_DIR = {MODULE_DIR}")
 
 from datetime import datetime
 from stable_baselines3 import PPO
-from envs.smallcity_env import SmallCityEnv
+from envs.projectairsim_smallcity_env import ProjectAirSimSmallCityEnv
 
 def main():
-    env = SmallCityEnv()
+    env = ProjectAirSimSmallCityEnv()
     model = PPO(
         "MultiInputPolicy",
         env,

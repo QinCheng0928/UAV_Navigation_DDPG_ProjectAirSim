@@ -1,6 +1,3 @@
-from pickle import NONE
-
-
 class ActionType:
     
     NORTH = 0   # +X
