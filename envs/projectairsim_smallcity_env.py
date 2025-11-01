@@ -18,11 +18,11 @@ class ProjectAirSimSmallCityEnv(gym.Env):
     def __init__(self):
         self.sim_config_fname = os.path.join(ROOT_DIR, "sim_config", "scene_basic_drone.jsonc")
         self.velocity_change = 1.0
-        self.thresh_dist = 5.0
+        self.thresh_dist = 10.0
         self.max_sim_steps = 500
         self._ignore_first_collision = True
         self.image_shape = (84, 84, 1)
-        self.target_point = np.array([140.0, 10.0, -1.0])
+        self.target_point = np.array([200.0, 10.0, -10.0])
         
         self.loop = asyncio.get_event_loop()
         
@@ -206,6 +206,7 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         ], dtype=np.float32)
         # collison state is updated in the _collision_callback function
 
+        print(f"Position: {self.state['position']}")
         return self.state
 
     def get_reward(self):
@@ -218,7 +219,7 @@ class ProjectAirSimSmallCityEnv(gym.Env):
         # 1. rewards for progress
         reward_progress = 5.0 * (self.prev_dist - self.dist)
         # 2. rewards for distance
-        reward_distance = 5.0 * (1 - self.dist / self.half_dist)
+        reward_distance = 1 - self.dist / self.thresh_dist
         # 3. rewards for speed
         reward_speed = np.linalg.norm([self.state["velocity"][0], self.state["velocity"][1], self.state["velocity"][2]])            
         # 4. rewards for arrival

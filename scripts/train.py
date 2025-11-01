@@ -28,7 +28,7 @@ def main():
         device="cuda",
         tensorboard_log=os.path.join(MODULE_DIR, current_time)
     )
-    model.learn(total_timesteps=int(1e4))
+    model.learn(total_timesteps=int(1e5))
     
     model_name = f"ppo_smallcity_{current_time}"
     save_path = os.path.join(MODULE_DIR, current_time, model_name)
